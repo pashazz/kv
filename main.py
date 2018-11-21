@@ -38,10 +38,10 @@ class Conversation(Document):
     class Index:
         name = 'conversations'
 
-    def add_message(self, author, text, time, last_edit = None, commit = True):
+    def add_message(self, author, text, time, last_edit = None):
         msg = Message(author=author, text=text, time=time, last_edit=last_edit, conversation_id=self.id)
-        if commit:
-            msg.save()
+
+        msg.save()
 
         return msg
 
@@ -90,7 +90,7 @@ class Conversation(Document):
 
             print(f"Add message: {author} at {msgtime}")
 
-            self.add_message(author, text, msgtime, edited, False)
+            self.add_message(author, text, msgtime, edited)
 
 
 
