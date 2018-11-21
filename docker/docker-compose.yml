@@ -1,0 +1,37 @@
+version: "2.0"
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:5.4.3
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - docker_elk
+  kibana:
+    image: docker.elastic.co/kibana/kibana:5.4.3
+    ports:
+      - "5601:5601"
+    links:
+      - elasticsearch
+    networks:
+      - docker_elk
+  vk_parser:
+    build: ..
+    depends_on:
+      - elasticsearch
+    links:
+      - elasticsearch
+      
+    container_name: vk_parser
+    volumes:
+      - ../:/vk_parser
+      - $VK_MESSAGES_FOLDER:/vk_messages_folder
+    env_file:
+      - ./locale_env.sh
+    command: bash -c "pip3 install setuptools --upgrade && pip3 install -r requirements.txt &&  python3 main.py vk_messages_folder"
+    ports:
+      - "16543:6543"
+
+networks:
+  docker_elk:
+    driver: bridge
