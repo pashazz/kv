@@ -3,7 +3,8 @@ from bs4 import BeautifulSoup, Tag,NavigableString
 import pathlib
 import sys
 from configparser import ConfigParser
-from elasticsearch_dsl import connections, Document, InnerDoc, Nested, Long, Text, Object, Keyword, Date
+from elasticsearch_dsl import connections, Document, InnerDoc, Nested, Long, Text, Object, Keyword, Date, MetaField
+from elasticsearch.helpers import bulk
 from collections import namedtuple
 from urllib.parse import urlparse
 from datetime  import datetime
@@ -16,9 +17,21 @@ language_table = {
     'ru': LanguageSettings(encoding='cp1251', datefmt='%d %b %Y в %H:%M:%S', locale='ru_RU.UTF-8', you='Вы')
 }
 
+def insert(doc: Document):
+    return doc.to_dict(include_meta=True)
+
+
 class Author(InnerDoc):
     id = Keyword(required=True)
     name = Text(required=True, fields={'keyword': Keyword()})
+
+
+
+
+class Conversation(Document):
+    id = Long(required=True)
+    name = Text(required=True, fields={'keyword': Keyword()})
+
 
 
 class Message(Document):
@@ -26,30 +39,17 @@ class Message(Document):
     text = Text(required=True)
     time = Date(required=True)
     last_edit = Date()
-    conversation_id = Long(required=True)
+    conversation = Object(Conversation, required=True)
 
     class Index:
         name = 'messages'
 
-class Conversation(Document):
-    id = Long(required=True)
-    name = Text(required=True, fields={'keyword': Keyword()})
 
-    class Index:
-        name = 'conversations'
-
-    def add_message(self, author, text, time, last_edit = None):
-        msg = Message(author=author, text=text, time=time, last_edit=last_edit, conversation_id=self.id)
-
-        msg.save()
-
-        return msg
-
-
-    def read_messages(self, path : pathlib.Path, lang: LanguageSettings):
+def read_messages(conversation, path: pathlib.Path, lang: LanguageSettings):
         with open(path, 'r', encoding=lang.encoding) as file:
             contents = file.read()
         dialog = BeautifulSoup(contents, 'html.parser')
+        msgs = []
         for writing in dialog.find_all('div', {'class': 'message'}):
             id: str = None
             name: str = None
@@ -58,19 +58,18 @@ class Conversation(Document):
             edited: datetime = None
             for elem in writing.children:
 
-
                 if not isinstance(elem, Tag) or elem.name != 'div':
                     continue
-                if 'class' in elem.attrs and 'message__header' in  elem.attrs['class']:
+                if 'class' in elem.attrs and 'message__header' in elem.attrs['class']:
                     if elem.a:
-                        link = elem.a # profile link
+                        link = elem.a  # profile link
                         id = urlparse(link['href']).path[1:]
                         name = link.text
                         date_s = elem.contents[1].strip(', ')
                         author = Author(id=id, name=name)
                     else:
                         date_s = elem.contents[0].replace(lang.you, '').strip(', ')
-                        author = Author(id='id0',name=lang.you)
+                        author = Author(id='id0', name=lang.you)
 
                     msgtime = datetime.strptime(date_s, lang.datefmt)
 
@@ -89,8 +88,10 @@ class Conversation(Document):
                             text += '\n'
 
             print(f"Add message: {author} at {msgtime}")
+            msg = Message(author=author, text=text, time=msgtime, last_edit=edited, conversation=conversation)
+            msgs.append(msg)
 
-            self.add_message(author, text, msgtime, edited)
+        bulk(connections.get_connection(), (insert(msg) for msg in msgs))
 
 
 
@@ -99,7 +100,6 @@ class Conversation(Document):
 def setup():
     " Create an IndexTemplate and save it into elasticsearch. "
     connections.create_connection()
-    Conversation.init()
     Message.init()
 
 
@@ -123,12 +123,14 @@ if __name__ == '__main__':
         contents = file.read()
 
     msg_index = BeautifulSoup(contents, 'html.parser')
+    conversations = []
     for peer in msg_index.find_all('div', {'class': 'message-peer--id'}):
         link = peer.a
         href = link['href']
         id = int(href.split('/')[0])
         name = link.text
         conversation = Conversation(id=id, name=name)
-        conversation.read_messages(folder.joinpath(MESSAGES_PATH, href), lang)
-        conversation.save()
+        read_messages(conversation, folder.joinpath(MESSAGES_PATH, href), lang)
+
+
 
